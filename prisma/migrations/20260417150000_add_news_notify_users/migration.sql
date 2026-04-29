@@ -1,0 +1,2 @@
+ALTER TABLE "noticias"
+ADD COLUMN IF NOT EXISTS "notify_users" BOOLEAN NOT NULL DEFAULT false;
