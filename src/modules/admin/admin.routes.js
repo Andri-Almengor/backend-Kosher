@@ -26,6 +26,91 @@ const DEFAULT_PRODUCTS_HOME_CARD = {
   showSecondaryButton: false,
 };
 
+
+const cloudinary = require('cloudinary').v2;
+
+function getCloudinaryFolder(req) {
+  const raw = String(req.body?.folder || process.env.CLOUDINARY_FOLDER || 'kosher-costa-rica').trim();
+  return raw.replace(/^\/+|\.\.|\/+$|\\/g, '') || 'kosher-costa-rica';
+}
+
+function extractCloudinaryPublicId(url) {
+  try {
+    const value = String(url || '').trim();
+    if (!value || !value.includes('res.cloudinary.com')) return '';
+    const path = new URL(value).pathname;
+    const uploadIndex = path.indexOf('/upload/');
+    if (uploadIndex < 0) return '';
+    let rest = path.slice(uploadIndex + '/upload/'.length);
+    rest = rest.replace(/^v\d+\//, '');
+    return rest.replace(/\.[a-zA-Z0-9]+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function assertCloudinaryConfigured() {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  if (!cloudName || !apiKey || !apiSecret) {
+    const err = new Error('Cloudinary no está configurado. Agrega CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY y CLOUDINARY_API_SECRET en el .env del backend.');
+    err.statusCode = 500;
+    throw err;
+  }
+  cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret, secure: true });
+}
+
+function uploadBufferToCloudinary(buffer, options) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
+}
+
+
+router.post('/uploads/image', upload.single('file'), async (req, res, next) => {
+  try {
+    assertCloudinaryConfigured();
+
+    if (!req.file?.buffer) {
+      return res.status(400).json({ ok: false, message: 'No se recibió ninguna imagen.' });
+    }
+
+    const folder = getCloudinaryFolder(req);
+    const result = await uploadBufferToCloudinary(req.file.buffer, {
+      folder,
+      resource_type: 'image',
+      overwrite: false,
+      use_filename: true,
+      unique_filename: true,
+      transformation: [
+        { width: 1800, height: 1800, crop: 'limit' },
+        { quality: 'auto:good', fetch_format: 'auto' },
+      ],
+    });
+
+    const oldPublicId = extractCloudinaryPublicId(req.body?.oldUrl);
+    if (oldPublicId && oldPublicId !== result.public_id) {
+      cloudinary.uploader.destroy(oldPublicId, { resource_type: 'image' }).catch(() => {});
+    }
+
+    return res.status(201).json({
+      ok: true,
+      url: result.secure_url,
+      publicId: result.public_id,
+      width: result.width,
+      height: result.height,
+      bytes: result.bytes,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/productos', async (req, res) => {
   const q = String(req.query?.q || '').trim();
   const items = await prisma.producto.findMany({
