@@ -273,3 +273,22 @@ model UiSetting {
 
   @@map("ui_settings")
 }
+
+model PushToken {
+  id          Int      @id @default(autoincrement())
+  token       String   @unique
+  platform    String?
+  language    String   @default("es")
+  deviceId    String?  @map("device_id")
+  appVersion  String?  @map("app_version")
+  enabled     Boolean  @default(true)
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+  creadoEn    DateTime @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  @@index([enabled])
+  @@index([language])
+  @@index([platform])
+  @@index([deviceId])
+  @@map("push_tokens")
+}

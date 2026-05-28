@@ -2,6 +2,7 @@ const router = require('express').Router();
 const multer = require('multer');
 const prisma = require('../../lib/prisma');
 const { toPublicProduct, toPublicRestaurant, toPublicNews } = require('../common/mappers');
+const { safeNotifyNewContent, shouldNotifyFromBody, sendPushToAll } = require('../../services/push.service');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const PRODUCTS_HOME_CARD_KEY = 'products-home-card';
@@ -261,6 +262,39 @@ router.post('/uploads/image', upload.single('file'), async (req, res, next) => {
   }
 });
 
+
+router.get('/push-tokens/stats', async (_req, res, next) => {
+  try {
+    const [total, enabled, android, ios, es, en] = await Promise.all([
+      prisma.pushToken.count(),
+      prisma.pushToken.count({ where: { enabled: true } }),
+      prisma.pushToken.count({ where: { enabled: true, platform: 'android' } }),
+      prisma.pushToken.count({ where: { enabled: true, platform: 'ios' } }),
+      prisma.pushToken.count({ where: { enabled: true, language: 'es' } }),
+      prisma.pushToken.count({ where: { enabled: true, language: 'en' } }),
+    ]);
+    res.json({ total, enabled, android, ios, es, en });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/push/send-test', async (req, res, next) => {
+  try {
+    const result = await sendPushToAll({
+      title: req.body?.title || 'Kosher Costa Rica',
+      body: req.body?.body || 'Notificación de prueba',
+      data: { type: 'test', screen: 'home' },
+    }, {
+      language: req.body?.language,
+      platform: req.body?.platform,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/productos', async (req, res, next) => {
   try {
     const q = String(req.query?.q || '').trim();
@@ -286,6 +320,9 @@ router.get('/productos', async (req, res, next) => {
 router.post('/productos', async (req, res, next) => {
   try {
     const item = await prisma.producto.create({ data: buildProductData(req.body, { partial: false }) });
+    if (shouldNotifyFromBody(req.body)) {
+      await safeNotifyNewContent('producto', item);
+    }
     res.status(201).json(toPublicProduct(item, 'es'));
   } catch (error) {
     next(error);
@@ -341,6 +378,9 @@ router.get('/restaurantes/options', async (_req, res, next) => {
 router.post('/restaurantes', async (req, res, next) => {
   try {
     const item = await prisma.restauranteComercio.create({ data: buildRestaurantData(req.body, { partial: false }) });
+    if (shouldNotifyFromBody(req.body)) {
+      await safeNotifyNewContent('restaurante', item);
+    }
     res.status(201).json(toPublicRestaurant(item, 'es'));
   } catch (error) {
     next(error);
@@ -379,6 +419,9 @@ router.get('/comercios', async (_req, res, next) => {
 router.post('/comercios', async (req, res, next) => {
   try {
     const item = await prisma.restauranteComercio.create({ data: buildRestaurantData(req.body, { partial: false }) });
+    if (shouldNotifyFromBody(req.body)) {
+      await safeNotifyNewContent('restaurante', item);
+    }
     res.status(201).json(toPublicRestaurant(item, 'es'));
   } catch (error) {
     next(error);
@@ -430,6 +473,9 @@ router.post('/noticias', async (req, res, next) => {
     const firstAdmin = await prisma.usuario.findFirst({ where: { activo: true }, orderBy: { id: 'asc' } });
     const data = buildNewsData(req.body, { partial: false, defaultAutorId: firstAdmin?.id });
     const item = await prisma.noticia.create({ data, include: { restaurante: true } });
+    if (data.notifyUsers || shouldNotifyFromBody(req.body)) {
+      await safeNotifyNewContent('noticia', item);
+    }
     res.status(201).json(toPublicNews(item));
   } catch (error) {
     next(error);
@@ -470,6 +516,9 @@ router.post('/novedades', async (req, res, next) => {
     const firstAdmin = await prisma.usuario.findFirst({ where: { activo: true }, orderBy: { id: 'asc' } });
     const data = buildNewsData(req.body, { partial: false, defaultAutorId: firstAdmin?.id });
     const item = await prisma.noticia.create({ data, include: { restaurante: true } });
+    if (data.notifyUsers || shouldNotifyFromBody(req.body)) {
+      await safeNotifyNewContent('noticia', item);
+    }
     res.status(201).json(toPublicNews(item));
   } catch (error) {
     next(error);

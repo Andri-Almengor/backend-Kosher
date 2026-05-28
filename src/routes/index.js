@@ -8,6 +8,7 @@ router.get('/health', (_req, res) => {
 router.use('/auth', require('../modules/auth/auth.routes'));
 router.use('/sync', require('../modules/sync/sync.routes'));
 router.use('/restaurantes', require('../modules/restaurants/restaurants.routes'));
+router.use('/push-tokens', require('../modules/push/push.routes'));
 router.use('/', require('../modules/public/public.routes'));
 router.use('/admin', require('../modules/admin/admin.routes'));
 
