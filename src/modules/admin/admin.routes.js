@@ -115,6 +115,93 @@ function normalizeNullableInt(value) {
   return Number.isInteger(n) ? n : null;
 }
 
+
+function normalizeTextKey(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeSealPayload(body = {}) {
+  const nombreEs = String(body.nombreEs ?? body.valueEs ?? body.sello ?? body.nombre ?? '').trim();
+  const nombreEn = String(body.nombreEn ?? body.valueEn ?? body.selloEn ?? '').trim();
+  const imageUrl = String(body.imageUrl ?? body.fotoSello1 ?? body.fotoSello ?? body.url ?? '').trim();
+
+  return {
+    id: body.id || `${normalizeTextKey(nombreEs || nombreEn).replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`,
+    nombreEs,
+    nombreEn: nombreEn || nombreEs,
+    imageUrl,
+    creadoEn: body.creadoEn || new Date().toISOString(),
+    actualizadoEn: new Date().toISOString(),
+  };
+}
+
+function sealToPublic(item = {}) {
+  return {
+    id: item.id || normalizeTextKey(item.nombreEs || item.nombreEn || item.imageUrl),
+    nombreEs: String(item.nombreEs ?? item.valueEs ?? '').trim(),
+    nombreEn: String(item.nombreEn ?? item.valueEn ?? item.nombreEs ?? '').trim(),
+    valueEs: String(item.nombreEs ?? item.valueEs ?? '').trim(),
+    valueEn: String(item.nombreEn ?? item.valueEn ?? item.nombreEs ?? '').trim(),
+    imageUrl: String(item.imageUrl ?? '').trim(),
+    creadoEn: item.creadoEn || null,
+    actualizadoEn: item.actualizadoEn || null,
+  };
+}
+
+async function getSealCatalog() {
+  const row = await prisma.uiSetting.findUnique({ where: { key: 'product-seals' } });
+  const raw = Array.isArray(row?.value) ? row.value : [];
+  return raw.map(sealToPublic).filter((item) => (item.nombreEs || item.nombreEn) && item.imageUrl);
+}
+
+async function saveSealCatalog(items) {
+  const normalized = [];
+  const seen = new Set();
+
+  for (const item of items || []) {
+    const seal = sealToPublic(item);
+    const key = normalizeTextKey(seal.nombreEs || seal.nombreEn);
+    if (!key || !seal.imageUrl || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      id: seal.id || key.replace(/[^a-z0-9]+/g, '-'),
+      nombreEs: seal.nombreEs || seal.nombreEn,
+      nombreEn: seal.nombreEn || seal.nombreEs,
+      imageUrl: seal.imageUrl,
+      creadoEn: seal.creadoEn || new Date().toISOString(),
+      actualizadoEn: seal.actualizadoEn || new Date().toISOString(),
+    });
+  }
+
+  normalized.sort((a, b) => String(a.nombreEs || a.nombreEn).localeCompare(String(b.nombreEs || b.nombreEn), 'es', { sensitivity: 'base' }));
+
+  await prisma.uiSetting.upsert({
+    where: { key: 'product-seals' },
+    create: { key: 'product-seals', value: normalized, activo: true },
+    update: { value: normalized, activo: true },
+  });
+
+  return normalized.map(sealToPublic);
+}
+
+async function ensureProductSealInCatalog({ nombreEs, nombreEn, imageUrl }) {
+  const seal = normalizeSealPayload({ nombreEs, nombreEn, imageUrl });
+  const key = normalizeTextKey(seal.nombreEs || seal.nombreEn);
+  if (!key || !seal.imageUrl) return null;
+
+  const catalog = await getSealCatalog();
+  const existing = catalog.find((item) => normalizeTextKey(item.nombreEs || item.nombreEn) === key);
+  if (existing) return existing;
+
+  const saved = await saveSealCatalog([seal, ...catalog]);
+  return saved.find((item) => normalizeTextKey(item.nombreEs || item.nombreEn) === key) || null;
+}
+
 function buildProductData(body, { partial = true } = {}) {
   const allowed = [
     'catGeneral', 'catGeneralEn', 'categoria1', 'categoria1En', 'fabricanteMarca', 'fabricanteMarcaEn',
@@ -295,6 +382,97 @@ router.post('/push/send-test', async (req, res, next) => {
   }
 });
 
+
+router.get('/productos/sellos', async (_req, res, next) => {
+  try {
+    const [catalog, products] = await Promise.all([
+      getSealCatalog(),
+      prisma.producto.findMany({
+        where: {
+          OR: [
+            { fotoSello1: { not: null } },
+            { fotoSello2: { not: null } },
+          ],
+        },
+        select: { sello: true, selloEn: true, fotoSello1: true, fotoSello2: true },
+      }),
+    ]);
+
+    const merged = [...catalog];
+    for (const product of products) {
+      if (product.sello || product.selloEn) {
+        merged.push(normalizeSealPayload({ nombreEs: product.sello, nombreEn: product.selloEn, imageUrl: product.fotoSello1 || product.fotoSello2 }));
+      }
+    }
+
+    const saved = await saveSealCatalog(merged);
+    res.json(saved);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/productos/sellos', async (req, res, next) => {
+  try {
+    const seal = normalizeSealPayload(req.body);
+
+    if (!(seal.nombreEs || seal.nombreEn)) {
+      return res.status(400).json({ ok: false, message: 'El sello necesita nombre.' });
+    }
+    if (!seal.imageUrl) {
+      return res.status(400).json({ ok: false, message: 'El sello necesita imagen.' });
+    }
+
+    const key = normalizeTextKey(seal.nombreEs || seal.nombreEn);
+    const catalog = await getSealCatalog();
+    const duplicate = catalog.find((item) => normalizeTextKey(item.nombreEs || item.nombreEn) === key);
+
+    if (duplicate) {
+      return res.status(409).json({ ok: false, message: 'Ya existe un sello con ese nombre.', seal: duplicate });
+    }
+
+    await saveSealCatalog([seal, ...catalog]);
+    res.status(201).json(sealToPublic(seal));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/productos/sellos/:id', async (req, res, next) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const catalog = await getSealCatalog();
+    const index = catalog.findIndex((item) => String(item.id) === id);
+    if (index < 0) return res.status(404).json({ ok: false, message: 'Sello no encontrado.' });
+
+    const nextSeal = normalizeSealPayload({ ...catalog[index], ...req.body, id });
+    if (!(nextSeal.nombreEs || nextSeal.nombreEn)) return res.status(400).json({ ok: false, message: 'El sello necesita nombre.' });
+    if (!nextSeal.imageUrl) return res.status(400).json({ ok: false, message: 'El sello necesita imagen.' });
+
+    const key = normalizeTextKey(nextSeal.nombreEs || nextSeal.nombreEn);
+    const duplicate = catalog.find((item, i) => i !== index && normalizeTextKey(item.nombreEs || item.nombreEn) === key);
+    if (duplicate) return res.status(409).json({ ok: false, message: 'Ya existe un sello con ese nombre.', seal: duplicate });
+
+    catalog[index] = nextSeal;
+    await saveSealCatalog(catalog);
+    res.json(sealToPublic(nextSeal));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/productos/sellos/:id', async (req, res, next) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const catalog = await getSealCatalog();
+    const nextCatalog = catalog.filter((item) => String(item.id) !== id);
+    await saveSealCatalog(nextCatalog);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/productos', async (req, res, next) => {
   try {
     const q = String(req.query?.q || '').trim();
@@ -319,7 +497,11 @@ router.get('/productos', async (req, res, next) => {
 
 router.post('/productos', async (req, res, next) => {
   try {
-    const item = await prisma.producto.create({ data: buildProductData(req.body, { partial: false }) });
+    const data = buildProductData(req.body, { partial: false });
+    const item = await prisma.producto.create({ data });
+    if ((data.sello || data.selloEn) && data.fotoSello1) {
+      await ensureProductSealInCatalog({ nombreEs: data.sello, nombreEn: data.selloEn, imageUrl: data.fotoSello1 });
+    }
     if (shouldNotifyFromBody(req.body)) {
       await safeNotifyNewContent('producto', item);
     }
@@ -333,6 +515,9 @@ async function updateProduct(req, res, next) {
   try {
     const data = buildProductData(req.body, { partial: true });
     const item = await prisma.producto.update({ where: { id: parseId(req) }, data });
+    if ((data.sello || data.selloEn) && data.fotoSello1) {
+      await ensureProductSealInCatalog({ nombreEs: data.sello, nombreEn: data.selloEn, imageUrl: data.fotoSello1 });
+    }
     res.json(toPublicProduct(item, 'es'));
   } catch (error) {
     next(error);
