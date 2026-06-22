@@ -641,6 +641,15 @@ router.post('/restaurantes/options/tipos', async (req, res, next) => {
   }
 });
 
+
+function shouldAutoNotifyNewsCreate(data = {}, body = {}) {
+  // Regla de negocio: toda novedad nueva visible debe avisar a los usuarios.
+  // Si el admin manda notifyUsers/sendNotification explícitamente, se respeta también.
+  const destino = String(data.destino || body.destino || 'NOVEDADES').toUpperCase();
+  const visible = data.activo !== false;
+  return visible && destino === 'NOVEDADES';
+}
+
 router.get('/noticias', async (_req, res, next) => {
   try {
     const items = await prisma.noticia.findMany({
@@ -658,7 +667,7 @@ router.post('/noticias', async (req, res, next) => {
     const firstAdmin = await prisma.usuario.findFirst({ where: { activo: true }, orderBy: { id: 'asc' } });
     const data = buildNewsData(req.body, { partial: false, defaultAutorId: firstAdmin?.id });
     const item = await prisma.noticia.create({ data, include: { restaurante: true } });
-    if (data.notifyUsers || shouldNotifyFromBody(req.body)) {
+    if (data.notifyUsers || shouldNotifyFromBody(req.body) || shouldAutoNotifyNewsCreate(data, req.body)) {
       await safeNotifyNewContent('noticia', item);
     }
     res.status(201).json(toPublicNews(item));
@@ -701,7 +710,7 @@ router.post('/novedades', async (req, res, next) => {
     const firstAdmin = await prisma.usuario.findFirst({ where: { activo: true }, orderBy: { id: 'asc' } });
     const data = buildNewsData(req.body, { partial: false, defaultAutorId: firstAdmin?.id });
     const item = await prisma.noticia.create({ data, include: { restaurante: true } });
-    if (data.notifyUsers || shouldNotifyFromBody(req.body)) {
+    if (data.notifyUsers || shouldNotifyFromBody(req.body) || shouldAutoNotifyNewsCreate(data, req.body)) {
       await safeNotifyNewContent('noticia', item);
     }
     res.status(201).json(toPublicNews(item));
