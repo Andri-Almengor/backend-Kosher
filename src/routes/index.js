@@ -11,9 +11,20 @@ router.use('/restaurantes', require('../modules/restaurants/restaurants.routes')
 router.use('/push-tokens', require('../modules/push/push.routes'));
 router.use('/', require('../modules/public/public.routes'));
 
-// Debe montarse antes del router administrativo general para reemplazar
-// el catálogo legado de sellos guardado dentro de ui_settings.
-router.use('/admin/productos/sellos', require('../modules/seals/seals.routes'));
+// Antes del router administrativo general, valida que cada producto use
+// exclusivamente sellos activos del catálogo normalizado.
+router.use(
+  '/admin/productos',
+  require('../modules/seals/product-seal-canonical.middleware')
+);
+
+// La tabla sellos_productos es la única fuente de verdad. Esta ruta reemplaza
+// completamente el catálogo legado que se reconstruía desde los productos.
+router.use(
+  '/admin/productos/sellos',
+  require('../modules/seals/authoritative-seals.routes')
+);
+
 router.use('/admin', require('../modules/admin/admin.routes'));
 
 module.exports = router;
