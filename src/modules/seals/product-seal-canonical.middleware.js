@@ -1,6 +1,18 @@
 const router = require('express').Router();
 const prisma = require('../../lib/prisma');
+const { ensureInitialSealMigration } = require('./seal-authority-bootstrap');
 const { canonicalizeProductSealBody } = require('./seal-catalog.service');
+
+// Migra y reconcilia el catálogo una única vez. Después queda marcado en
+// ui_settings y las lecturas normales ya no vuelven a importar valores legados.
+router.use(async (_req, _res, next) => {
+  try {
+    await ensureInitialSealMigration();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 async function canonicalizeCreate(req, _res, next) {
   try {
