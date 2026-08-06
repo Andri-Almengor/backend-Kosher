@@ -29,21 +29,6 @@ async function ensureInitialSealMigration() {
   return migrationPromise;
 }
 
-async function recordManualSealMigration(result) {
-  const value = {
-    completedAt: new Date().toISOString(),
-    manual: true,
-    ...result,
-  };
-  await prisma.uiSetting.upsert({
-    where: { key: MIGRATION_KEY },
-    create: { key: MIGRATION_KEY, value, activo: true },
-    update: { value, activo: true },
-  });
-  return value;
-}
-
 module.exports = {
   ensureInitialSealMigration,
-  recordManualSealMigration,
 };
