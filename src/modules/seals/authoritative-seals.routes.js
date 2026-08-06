@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const { recordManualSealMigration } = require('./seal-authority-bootstrap');
 const {
   auditCatalog,
   calculateUsage,
@@ -38,6 +39,7 @@ router.get('/audit', async (_req, res, next) => {
 router.post('/sync-existing', async (_req, res, next) => {
   try {
     const result = await syncExistingSourcesAndReconcile();
+    await recordManualSealMigration(result);
     res.json({ ok: true, ...result });
   } catch (error) {
     next(error);
