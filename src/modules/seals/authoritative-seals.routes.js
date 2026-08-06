@@ -42,9 +42,14 @@ router.post('/sync-existing', async (_req, res, next) => {
     const migration = await ensureInitialSealMigration();
     const reconciliation = await reconcileProducts({ clearUnknown: true });
     await writeLegacyCatalog();
+    const rows = await getRows({ includeInactive: true, includeDeleted: false });
+
     res.json({
       ok: true,
       alreadyMigrated: true,
+      imported: Number(migration?.imported || 0),
+      merged: Number(migration?.merged || 0),
+      total: rows.length,
       migration,
       ...reconciliation,
     });
