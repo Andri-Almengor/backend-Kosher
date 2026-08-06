@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { recordManualSealMigration } = require('./seal-authority-bootstrap');
+const { ensureInitialSealMigration } = require('./seal-authority-bootstrap');
 const {
   auditCatalog,
   calculateUsage,
@@ -8,8 +8,8 @@ const {
   getRows,
   reconcileProducts,
   rowToPublic,
-  syncExistingSourcesAndReconcile,
   updateSeal,
+  writeLegacyCatalog,
 } = require('./seal-catalog.service');
 
 router.options('*', (_req, res) => res.sendStatus(204));
@@ -34,13 +34,20 @@ router.get('/audit', async (_req, res, next) => {
   }
 });
 
-// Acción explícita de migración: importa el legado una sola vez, deduplica y
-// deja todos los productos apuntando a los valores canónicos de la tabla.
+// La importación del legado ocurre únicamente dentro de ensureInitialSealMigration.
+// Después de quedar marcada, este botón solo vuelve a aplicar los valores oficiales
+// de la tabla a los productos; nunca reimporta sellos huérfanos desde ellos.
 router.post('/sync-existing', async (_req, res, next) => {
   try {
-    const result = await syncExistingSourcesAndReconcile();
-    await recordManualSealMigration(result);
-    res.json({ ok: true, ...result });
+    const migration = await ensureInitialSealMigration();
+    const reconciliation = await reconcileProducts({ clearUnknown: true });
+    await writeLegacyCatalog();
+    res.json({
+      ok: true,
+      alreadyMigrated: true,
+      migration,
+      ...reconciliation,
+    });
   } catch (error) {
     next(error);
   }
@@ -49,6 +56,7 @@ router.post('/sync-existing', async (_req, res, next) => {
 router.post('/reconcile-products', async (_req, res, next) => {
   try {
     const result = await reconcileProducts({ clearUnknown: true });
+    await writeLegacyCatalog();
     res.json({ ok: true, ...result });
   } catch (error) {
     next(error);
